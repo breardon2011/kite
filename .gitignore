@@ -1,0 +1,4 @@
+.env
+env/
+videos/
+session_events/
