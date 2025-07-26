@@ -1,13 +1,16 @@
 import os
 import cv2
 import torch
-import clip
+import clip  # Change this line
 import ffmpeg
 import numpy as np
 from PIL import Image
 from ultralytics import YOLO
 from transformers import GPT2TokenizerFast
 import openai
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ========== Config ==========
 VIDEO_PATH = "videos/test1.mp4"
@@ -76,26 +79,50 @@ def embed_frame_caption_pairs(results, frame_dir, clip_model, preprocess, device
         frame_embeddings.append((frame_file, image_features))
     return frame_embeddings
 
-# ========== Step 5: Summarize via GPT ==========
-def analyze_with_gpt(frame_files, results):
-    summary_lines = []
-    for frame_file, result in zip(frame_files, results):
-        boxes = result.boxes.xyxy.cpu().numpy()
-        if len(boxes) == 0:
-            continue
-        summary_lines.append(f"In frame {frame_file}, detected {len(boxes)} UI elements.")
-    summary = "\n".join(summary_lines)
-    print("🔍 Prompt to GPT:\n", summary)
-
-    # Send to GPT
-    completion = openai.ChatCompletion.create(
-        model="gpt-4",
+# ========== Step 5: Analyze frames with GPT-4V ==========
+def analyze_with_gpt4v(frame_files, frame_dir, max_frames=10):
+    """Analyze frames directly with GPT-4V for better UX insights"""
+    
+    # Limit frames to avoid token limits and costs
+    frame_files = frame_files[:max_frames]
+    
+    # Prepare images for GPT-4V
+    images = []
+    for frame_file in frame_files:
+        image_path = os.path.join(frame_dir, frame_file)
+        # Convert to base64 for API
+        import base64
+        with open(image_path, "rb") as image_file:
+            encoded_image = base64.b64encode(image_file.read()).decode('utf-8')
+        images.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/png;base64,{encoded_image}"
+            }
+        })
+    
+    # Create content with images and text
+    content = [
+        {
+            "type": "text",
+            "text": f"You are an expert UX analyst. Analyze these {len(images)} frames from a user session and answer: {QUERY}\n\nPlease provide detailed insights about user behavior, potential issues, and UX improvements."
+        }
+    ]
+    content.extend(images)
+    
+    # Send to GPT-4V
+    client = openai.OpenAI()
+    completion = client.chat.completions.create(
+        model="gpt-4o",
         messages=[
-            {"role": "system", "content": "You are an expert UX analyst."},
-            {"role": "user", "content": f"Here is a log of what's detected in each frame:\n{summary}\n\n{QUERY}"}
-        ]
+            {
+                "role": "user",
+                "content": content
+            }
+        ],
+        max_tokens=4000
     )
-    return completion.choices[0].message["content"]
+    return completion.choices[0].message.content
 
 # ========== Run Pipeline ==========
 def main():
@@ -109,10 +136,11 @@ def main():
     clip_model, preprocess, device = load_clip()
     _ = embed_frame_caption_pairs(yolo_results, FRAME_DIR, clip_model, preprocess, device)
 
-    print("📈 Analyzing frames with GPT...")
-    gpt_output = analyze_with_gpt([f for f, _ in yolo_results], [r for _, r in yolo_results])
+    print("📈 Analyzing frames with GPT-4V...")
+    frame_files = [f for f, _ in yolo_results]
+    gpt_output = analyze_with_gpt4v(frame_files, FRAME_DIR, max_frames=20)
 
-    print("📝 GPT-4 Analysis:\n", gpt_output)
+    print("📝 GPT-4V Analysis:\n", gpt_output)
 
 if __name__ == "__main__":
     main()

@@ -2,3 +2,5 @@
 env/
 videos/
 session_events/
+frames/
+yolov8n.pt
